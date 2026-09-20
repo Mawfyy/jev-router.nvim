@@ -151,6 +151,10 @@ init.setup({
 })
 init.ask("refactor this function")
 
+-- Handlers are dispatched via vim.schedule (out of the fast event context),
+-- so wait for the scheduled task to run.
+vim.wait(1000, function() return #dispatched == 1 end)
+
 ok(seen.args ~= nil, "vim.system invoked with curl args")
 eq(#dispatched, 1, "exactly one route dispatched")
 ok(dispatched[1] == "edit_code:refactor this function", "routed to edit_code")

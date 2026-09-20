@@ -170,18 +170,18 @@ function M.decide(payload, question_id, callback)
         err = err .. " (" .. vim.trim(obj.stderr) .. ")"
       end
       cfg.on_error(err)
-      callback(nil, err)
+      vim.schedule(function() callback(nil, err) end)
       return
     end
 
     local parsed, perr = M.parse_question(obj.stdout or "", question_id)
     if perr then
       cfg.on_error(perr)
-      callback(nil, perr)
+      vim.schedule(function() callback(nil, perr) end)
       return
     end
 
-    callback(parsed)
+    vim.schedule(function() callback(parsed) end)
   end
 
   vim.system(args, {}, on_exit)
@@ -318,11 +318,11 @@ function M.chat(messages, callback)
     if content == nil or content == "" then
       local err = "empty_completion"
       cfg.on_error(err)
-      callback(nil, err)
+      vim.schedule(function() callback(nil, err) end)
       return
     end
 
-    callback(content)
+    vim.schedule(function() callback(content) end)
   end
 
   vim.system(args, {}, on_exit)

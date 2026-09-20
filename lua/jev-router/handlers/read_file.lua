@@ -136,46 +136,38 @@ end
 ---Semantically resolve which file a prompt refers to and open it.
 ---@param prompt string
 function M.run(prompt)
-  -- The decisions callback (on_exit in api.lua) runs in a fast event context
-  -- where nvim_list_bufs/open_win are forbidden; re-enter the main loop.
-  vim.schedule(function()
-    M.gather_candidates(function(candidates)
-      if #candidates == 0 then
-        config.get().on_error("no_candidates")
+  M.gather_candidates(function(candidates)
+    if #candidates == 0 then
+      config.get().on_error("no_candidates")
+      return
+    end
+
+    api.select_file(candidates, prompt, function(parsed, err)
+      if err then
+        if #candidates == 1 then
+          M.open(candidates[1])
+        else
+          choose_from_picker(candidates, prompt)
+        end
         return
       end
 
-      api.select_file(candidates, prompt, function(parsed, err)
-        local function handle()
-          if err then
-            if #candidates == 1 then
-              M.open(candidates[1])
-            else
-              choose_from_picker(candidates, prompt)
-            end
-            return
-          end
+      local choice = parsed and parsed.choice
+      local confidence = parsed and parsed.confidence or 0
+      local threshold = config.get().confidence_threshold or 0.6
 
-          local choice = parsed and parsed.choice
-          local confidence = parsed and parsed.confidence or 0
-          local threshold = config.get().confidence_threshold or 0.6
+      if choice == nil then
+        choose_from_picker(candidates, prompt)
+        return
+      end
 
-          if choice == nil then
-            choose_from_picker(candidates, prompt)
-            return
-          end
+      if confidence < threshold then
+        config.get().on_uncertain("read_file", confidence)
+        choose_from_picker(candidates, prompt)
+        return
+      end
 
-          if confidence < threshold then
-            config.get().on_uncertain("read_file", confidence)
-            choose_from_picker(candidates, prompt)
-            return
-          end
-
-          M.open(choice)
-        end
-
-        vim.schedule(handle)
-      end)
+      M.open(choice)
     end)
   end)
 end
