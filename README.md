@@ -85,8 +85,8 @@ require("jev-router").setup({
 | Option                | Type     | Default                                          | Description                                        |
 | --------------------- | -------- | ------------------------------------------------ | -------------------------------------------------- |
 | `api_key`             | `string` | `$OPENROUTER_API_KEY`                            | OpenRouter API key                                 |
-| `endpoint`            | `string` | `https://openrouter.ai/api/v1/alpha/decisions`   | Decisions endpoint                                 |
-| `model`               | `string` | `typesafe/jev-latest`                            | Model alias                                        |
+| `endpoint`            | `string` | `https://openrouter.ai/api/alpha/decisions`      | Decisions endpoint                                 |
+| `model`               | `string` | `typesafe/jev-1.13`                             | Model alias                                        |
 | `timeout_ms`          | `integer`| `30000`                                          | Per-request timeout                                |
 | `confidence_threshold`| `number` | `0.6`                                            | Minimum confidence to act on a route               |
 | `on_error`            | `fun(err: string)` | notify                            | Error callback                                     |

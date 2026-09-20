@@ -40,13 +40,14 @@ local api = require("jev-router.api")
 local cfg = config.setup({ api_key = "explicit-key", model = "custom/model" })
 eq(cfg.api_key, "explicit-key", "config.api_key honors explicit value")
 eq(cfg.model, "custom/model", "config.model honors override")
-eq(cfg.endpoint, "https://openrouter.ai/api/v1/alpha/decisions", "config.endpoint default")
+eq(cfg.endpoint, "https://openrouter.ai/api/alpha/decisions", "config.endpoint default")
 
--- env fallback on a fresh config with no explicit key
+-- env fallback on a fresh config with no explicit/default key
 vim.env.OPENROUTER_API_KEY = "env-key"
 local fresh_config = require("jev-router.config")
--- reset accumulated user opts to simulate a clean setup
+-- reset accumulated user opts and clear the built-in default key
 fresh_config._user_opts = {}
+fresh_config.defaults.api_key = nil
 fresh_config.setup({})
 eq(fresh_config.get().api_key, "env-key", "config.api_key falls back to env var")
 vim.env.OPENROUTER_API_KEY = nil
