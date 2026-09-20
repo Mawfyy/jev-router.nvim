@@ -10,7 +10,7 @@ question (`intent`), and maps the result to one of four routes:
 
 | Intent            | Meaning                                              |
 | ----------------- | ---------------------------------------------------- |
-| `read_file`       | Understand / inspect the active buffer               |
+| `read_file`       | Open the file the prompt refers to (semantic)        |
 | `edit_code`       | Modify / write code in the active buffer             |
 | `run_command`     | Run a terminal command (tests, build, ...)           |
 | `general_question`| A broad question needing no file context             |
@@ -18,12 +18,13 @@ question (`intent`), and maps the result to one of four routes:
 ## Requirements
 
 - Neovim **0.10+** (`vim.system`), and `curl` on `$PATH`.
+- `git` for file-candidate discovery (`read_file` falls back to `find` if absent).
 
 ## Install (lazy.nvim)
 
 ```lua
 {
-  "yourname/jev-router.nvim",
+  "Mawfyy/jev-router.nvim",
   opts = {
     -- api_key = "sk-or-...", -- or set OPENROUTER_API_KEY in your environment
     confidence_threshold = 0.6,
@@ -59,8 +60,10 @@ require("jev-router").setup({
 ## Usage
 
 ```vim
-:JevAsk implement a fibonacci function
+:JevAsk open the file related to config
+:JevAsk rename this function to greet
 :JevAsk run the test suite
+:JevAsk what does this plugin do
 ```
 
 ```
@@ -113,4 +116,4 @@ require("jev-router").setup({
 | `file_candidates_max` | `integer`| `100`                                            | Max candidate files sent to Jev for `read_file`    |
 | `on_error`            | `fun(err: string)` | notify                            | Error callback                                     |
 | `on_uncertain`        | `fun(intent, confidence)` | notify                    | Low-confidence callback                            |
-| `route_handlers`      | `table`  | stubs                                            | Per-intent overrides                               |
+| `route_handlers`      | `table`  | builtin                                              | Per-intent overrides                               |
