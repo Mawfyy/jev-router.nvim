@@ -34,6 +34,20 @@ question (`intent`), and maps the result to one of four routes:
 
 No external Lua dependencies are required.
 
+## API key
+
+The plugin reads `OPENROUTER_API_KEY` from your environment. The easiest way is
+an `.env` file (loaded automatically from the plugin root, your working
+directory, or your Neovim config directory):
+
+```bash
+# ~/.config/nvim/.env  (or .env in your project root)
+OPENROUTER_API_KEY="sk-or-v1-..."
+```
+
+Or export it in your shell, or pass `api_key` explicitly to `setup`. Prefer the
+`.env`/environment approach so the key never ends up in your git history.
+
 ## Setup
 
 ```lua
