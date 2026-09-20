@@ -1,0 +1,6 @@
+tags
+tags.lock
+tags.tmp
+*.swp
+*.swo
+doc/tags
