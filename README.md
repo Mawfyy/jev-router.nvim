@@ -160,25 +160,27 @@ The plugin keeps a bounded, per-buffer conversation so follow-ups like
 with `:JevClear`.
 
 ## Configuration
-| --------------------- | -------- | ------------------------------------------------ | -------------------------------------------------- |
-| `api_key`             | `string` | `$OPENROUTER_API_KEY`                            | OpenRouter API key                                 |
-| `endpoint`            | `string` | `https://openrouter.ai/api/alpha/decisions`      | Decisions endpoint                                 |
-| `model`               | `string` | `typesafe/jev-1.13`                             | Model alias                                        |
-| `chat_model`          | `string` | `openai/gpt-4o-mini`                             | Chat model for command/answer generation           |
-| `chat_models`         | `table`  | `{ quick = {...}, deep = {...} }`                | Tiered models (fallback order) for `general_question` |
-| `chat_endpoint`       | `string` | `https://openrouter.ai/api/v1/chat/completions` | Chat-completions endpoint                          |
-| `chat_backend`        | `function` | built-in OpenRouter chat client                 | Custom chat backend (model, messages, callback, opts) |
-| `chat_stream_backend` | `function` | built-in OpenRouter streaming client            | Custom streaming backend (model, messages, on_chunk, on_done) |
-| `stream`              | `boolean` | `true`                                          | Stream responses incrementally                     |
-| `conversation`        | `boolean` | `true`                                          | Keep a per-buffer conversation history             |
-| `conversation_max_turns` | `integer` | `6`                                          | Max turn pairs retained per buffer                 |
-| `file_provider`       | `table`  | git + buffers                                   | Custom file provider `{ list = function(callback) }` |
-| `context_max_files`   | `integer`| `200`                                            | Max files listed in injected context               |
-| `context_max_chars`   | `integer`| `20000`                                          | Max injected context characters                    |
-| `context_key_files`   | `string[]`| `{ "README.md" }`                               | File basenames always injected as context          |
-| `timeout_ms`          | `integer`| `30000`                                          | Per-request timeout                                |
-| `confidence_threshold`| `number` | `0.6`                                            | Minimum confidence to act on a route               |
-| `file_candidates_max` | `integer`| `100`                                            | Max candidate files sent to Jev for `read_file`    |
-| `on_error`            | `fun(err: string)` | notify                            | Error callback                                     |
-| `on_uncertain`        | `fun(intent, confidence)` | notify                    | Low-confidence callback                            |
-| `route_handlers`      | `table`  | builtin                                              | Per-intent overrides                               |
+
+| Option                  | Type       | Default                                          | Description                                        |
+| ----------------------- | ---------- | ------------------------------------------------ | -------------------------------------------------- |
+| `api_key`               | `string`   | `$OPENROUTER_API_KEY`                            | OpenRouter API key                                 |
+| `endpoint`              | `string`   | `https://openrouter.ai/api/alpha/decisions`      | Decisions endpoint                                 |
+| `model`                 | `string`   | `typesafe/jev-1.13`                              | Model alias                                        |
+| `chat_model`            | `string`   | `openai/gpt-4o-mini`                             | Chat model for command/answer generation           |
+| `chat_models`           | `table`    | `{ quick = {...}, deep = {...} }`                | Tiered models (fallback order) for `general_question` |
+| `chat_endpoint`         | `string`   | `https://openrouter.ai/api/v1/chat/completions`  | Chat-completions endpoint                          |
+| `chat_backend`          | `function` | built-in OpenRouter chat client                  | Custom chat backend (model, messages, callback, opts) |
+| `chat_stream_backend`   | `function` | built-in OpenRouter streaming client             | Custom streaming backend (model, messages, on_chunk, on_done) |
+| `stream`                | `boolean`  | `true`                                           | Stream responses incrementally                     |
+| `conversation`          | `boolean`  | `true`                                           | Keep a per-buffer conversation history             |
+| `conversation_max_turns`| `integer`  | `6`                                              | Max turn pairs retained per buffer                 |
+| `file_provider`         | `table`    | git + buffers                                    | Custom file provider `{ list = function(callback) }` |
+| `context_max_files`     | `integer`  | `200`                                            | Max files listed in injected context               |
+| `context_max_chars`     | `integer`  | `20000`                                          | Max injected context characters                    |
+| `context_key_files`     | `string[]` | `{ "README.md" }`                                | File basenames always injected as context          |
+| `timeout_ms`            | `integer`  | `30000`                                          | Per-request timeout                                |
+| `confidence_threshold`  | `number`   | `0.6`                                            | Minimum confidence to act on a route               |
+| `file_candidates_max`   | `integer`  | `100`                                            | Max candidate files sent to Jev for `read_file`    |
+| `on_error`              | `function` | notify                                           | Error callback                                     |
+| `on_uncertain`          | `function` | notify                                           | Low-confidence callback                            |
+| `route_handlers`        | `table`    | builtin                                          | Per-intent overrides                               |
