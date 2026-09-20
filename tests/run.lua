@@ -66,6 +66,7 @@ local p = api.build_payload("run the tests")
 eq(p.state, "run the tests", "payload.state is the prompt")
 eq(p.questions.intent.type, "choice", "payload question type is choice")
 eq(vim.tbl_count(p.questions.intent.criteria), 4, "payload has 4 intent criteria")
+eq(p.questions.complexity.type, "choice", "payload asks a parallel complexity question")
 
 -- ------------------------------------------------------------------ parse
 local okresp = '{"model":"typesafe/jev-1.13",'
@@ -86,6 +87,15 @@ eq(e2, "bad_json", "parse surfaces malformed body")
 
 local _, e3 = api.parse('{"answers":{}}')
 eq(e3, "bad_json", "parse surfaces missing intent answer")
+
+-- parse_answers returns every question
+local multresp = '{"model":"m","answers":{'
+  .. '"intent":{"type":"choice","choice":"general_question","confidence":0.8,"probabilities":{}},'
+  .. '"complexity":{"type":"choice","choice":"deep","confidence":0.9,"probabilities":{}}}}'
+local all, aerr = api.parse_answers(multresp)
+eq(aerr, nil, "parse_answers returns no error")
+eq(all.intent.choice, "general_question", "parse_answers extracts intent")
+eq(all.complexity.choice, "deep", "parse_answers extracts complexity")
 
 -- ----------------------------------------------------- file choice payload
 local fp = api.build_choice_payload("open drivers code", "file", "which file?", {
@@ -135,18 +145,23 @@ vim.system = function(args, opts, on_exit)
   seen.args = args
   on_exit({
     code = 0,
-    stdout = '{"model":"x","answers":{"intent":{"type":"choice",'
-      .. '"choice":"edit_code","confidence":0.95,"probabilities":{"edit_code":1.0}}}}',
+    stdout = '{"model":"x","answers":{'
+      .. '"intent":{"type":"choice","choice":"edit_code","confidence":0.95,"probabilities":{"edit_code":1.0}},'
+      .. '"complexity":{"type":"choice","choice":"deep","confidence":0.9,"probabilities":{}}}}',
     stderr = "",
   })
 end
 
 local dispatched = {}
+local dispatched_complexity = nil
 init.setup({
   api_key = "k",
   confidence_threshold = 0.6,
   route_handlers = {
-    edit_code = function(prompt) table.insert(dispatched, "edit_code:" .. prompt) end,
+    edit_code = function(prompt, answer)
+      table.insert(dispatched, "edit_code:" .. prompt)
+      dispatched_complexity = answer and answer.complexity
+    end,
   },
 })
 init.ask("refactor this function")
@@ -158,9 +173,45 @@ vim.wait(1000, function() return #dispatched == 1 end)
 ok(seen.args ~= nil, "vim.system invoked with curl args")
 eq(#dispatched, 1, "exactly one route dispatched")
 ok(dispatched[1] == "edit_code:refactor this function", "routed to edit_code")
+eq(dispatched_complexity, "deep", "complexity answer threaded to handler")
 
 -- restore
 vim.system = orig_system
+
+-- ------------------------------------------------- interface: chat backend
+local backend_called = nil
+config.setup({ chat_backend = function(models, messages, cb)
+  backend_called = models
+  cb("fake-reply", nil)
+end })
+local chat_text = nil
+api.chat("gpt-x", { { role = "user", content = "hi" } }, function(text)
+  chat_text = text
+end)
+eq(backend_called, "gpt-x", "api.chat delegates to configured chat_backend")
+eq(chat_text, "fake-reply", "chat backend reply delivered to callback")
+
+-- ------------------------------------------------- interface: file provider
+local files = require("jev-router.files")
+local listed = nil
+config.setup({ file_provider = { list = function(cb) cb({ "/fake/a.lua" }) end } })
+files.gather_candidates(function(c)
+  listed = c
+end)
+eq(#listed, 1, "gather_candidates delegates to configured file_provider")
+eq(listed[1], "/fake/a.lua", "file provider list delivered to callback")
+
+-- ----------------------------------------- context does not require network
+-- (file provider + buffer only; read_bounded is pure io)
+local tmp = vim.fn.tempname()
+local tf = assert(io.open(tmp, "w"))
+tf:write("hello world")
+tf:close()
+local truncated = files.read_bounded(tmp, 5)
+ok(truncated ~= nil and truncated:sub(1, 5) == "hello" and #truncated > 5,
+  "read_bounded truncates long content")
+eq(files.read_bounded(tmp, 100), "hello world", "read_bounded returns full short content")
+os.remove(tmp)
 
 -- ----------------------------------------------------------------- summary
 log(string.format("RESULT: %d passed, %d failed", passed, failed))

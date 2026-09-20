@@ -10,8 +10,24 @@
 ---Chat model used for generating commands / answering questions (OpenRouter
 ---chat-completions API).
 ---@field chat_model? string
+---Per-tier chat models (with fallback order) for `general_question`. `quick`
+---handles simple questions (may be a rate-limited free model), `deep` handles
+---open-ended reasoning. Each value is an ordered list tried until one succeeds.
+---@field chat_models? { quick: string[], deep: string[] }
 ---Chat-completions endpoint.
 ---@field chat_endpoint? string
+---Maximum number of project files listed in the injected context.
+---@field context_max_files? integer
+---Maximum total characters of injected context content.
+---@field context_max_chars? integer
+---File names (basename or repo-relative) whose contents are always injected as
+---context, when present.
+---@field context_key_files? string[]
+---Custom chat backend. Overrides the built-in OpenRouter chat-completions client.
+---Signature: `fun(model: string|string[], messages: table[], callback: fun(text: string|nil, err: string|nil))`.
+---@field chat_backend? fun(model: string|string[], messages: table[], callback: function)
+---Custom file provider. Overrides the built-in git + buffers discovery.
+---@field file_provider? { list: fun(callback: fun(paths: string[])) }
 ---Per-request timeout in milliseconds.
 ---@field timeout_ms? integer
 ---Minimum Choice `confidence` (0..1) required to act on a route. Below this the
@@ -37,7 +53,13 @@
 ---@field endpoint string
 ---@field model string
 ---@field chat_model string
+---@field chat_models { quick: string[], deep: string[] }
 ---@field chat_endpoint string
+---@field context_max_files integer
+---@field context_max_chars integer
+---@field context_key_files string[]
+---@field chat_backend fun(model: string|string[], messages: table[], callback: function)
+---@field file_provider { list: fun(callback: fun(paths: string[])) }
 ---@field timeout_ms integer
 ---@field confidence_threshold number
 ---@field file_candidates_max integer
@@ -54,7 +76,14 @@ M.defaults = {
   endpoint = "https://openrouter.ai/api/alpha/decisions",
   model = "typesafe/jev-1.13",
   chat_model = "openai/gpt-4o-mini",
+  chat_models = {
+    quick = { "meta-llama/llama-3.3-70b-instruct:free", "openai/gpt-4o-mini" },
+    deep = { "openai/gpt-4o-mini", "anthropic/claude-sonnet" },
+  },
   chat_endpoint = "https://openrouter.ai/api/v1/chat/completions",
+  context_max_files = 200,
+  context_max_chars = 20000,
+  context_key_files = { "README.md" },
   timeout_ms = 30000,
   confidence_threshold = 0.6,
   file_candidates_max = 100,

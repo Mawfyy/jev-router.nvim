@@ -55,16 +55,36 @@ function M.build_choice_payload(prompt, question_id, instructions, criteria)
   }
 end
 
----Build the intent routing request body.
+---Build the intent routing request body. Also asks a parallel `complexity`
+---question (quick vs deep) consumed by chat-backed handlers like
+---`general_question`; it runs in the same request for zero extra latency.
 ---@param prompt string
 ---@return table payload
 function M.build_payload(prompt)
-  return M.build_choice_payload(prompt, "intent", "What does the user want to do?", {
-    read_file = "Understand or inspect the active buffer / file content.",
-    edit_code = "Modify, refactor, or write code in the active buffer.",
-    run_command = "Execute a terminal command such as running tests or a build.",
-    general_question = "A broad question requiring no file context.",
-  })
+  return {
+    model = config.get().model,
+    state = prompt,
+    questions = {
+      intent = {
+        type = "choice",
+        instructions = "What does the user want to do?",
+        criteria = {
+          read_file = "Understand or inspect the active buffer / file content.",
+          edit_code = "Modify, refactor, or write code in the active buffer.",
+          run_command = "Execute a terminal command such as running tests or a build.",
+          general_question = "A broad question requiring no file context.",
+        },
+      },
+      complexity = {
+        type = "choice",
+        instructions = "How much reasoning does answering this request require?",
+        criteria = {
+          quick = "A simple, factual, or well-known answer needing little reasoning.",
+          deep = "Open-ended, architectural, or multi-step reasoning about the project.",
+        },
+      },
+    },
+  }
 end
 
 ---Parse the answer for a single question from a raw Decisions API response.
@@ -75,6 +95,25 @@ end
 function M.parse_question(body, question_id)
   question_id = question_id or "intent"
 
+  local answers, err = M.parse_answers(body)
+  if err then
+    return nil, err
+  end
+
+  local answer = answers[question_id]
+  if answer == nil then
+    return nil, "bad_json"
+  end
+
+  return answer
+end
+
+---Parse every answer from a raw Decisions API response into a map of
+---question id -> ParsedAnswer.
+---@param body string Raw response body.
+---@return table<string, jev-router.api.ParsedAnswer>|nil answers
+---@return string|nil err
+function M.parse_answers(body)
   if vim.json == nil or vim.json.decode == nil then
     return nil, "bad_json"
   end
@@ -84,7 +123,6 @@ function M.parse_question(body, question_id)
     return nil, "bad_json"
   end
 
-  -- OpenRouter errors carry { error = { code, message } }.
   if decoded.error and type(decoded.error) == "table" then
     local code = tostring(decoded.error.code or "unknown")
     local msg = tostring(decoded.error.message or "unknown error")
@@ -92,18 +130,24 @@ function M.parse_question(body, question_id)
   end
 
   local answers = decoded.answers
-  if type(answers) ~= "table" or type(answers[question_id]) ~= "table" then
+  if type(answers) ~= "table" then
     return nil, "bad_json"
   end
 
-  local answer = answers[question_id]
-  return {
-    choice = answer.choice,
-    confidence = tonumber(answer.confidence) or 0,
-    probabilities = answer.probabilities or {},
-    model = decoded.model,
-    usage = decoded.usage or {},
-  }
+  local out = {}
+  for qid, answer in pairs(answers) do
+    if type(answer) == "table" then
+      out[qid] = {
+        choice = answer.choice,
+        confidence = tonumber(answer.confidence) or 0,
+        probabilities = answer.probabilities or {},
+        model = decoded.model,
+        usage = decoded.usage or {},
+      }
+    end
+  end
+
+  return out
 end
 
 ---Parse the `intent` answer from a raw Decisions API response.
@@ -174,11 +218,26 @@ function M.decide(payload, question_id, callback)
       return
     end
 
-    local parsed, perr = M.parse_question(obj.stdout or "", question_id)
+    local answers, perr = M.parse_answers(obj.stdout or "")
     if perr then
       cfg.on_error(perr)
       vim.schedule(function() callback(nil, perr) end)
       return
+    end
+
+    local parsed = answers[question_id]
+    if parsed == nil then
+      local err = "bad_json"
+      cfg.on_error(err)
+      vim.schedule(function() callback(nil, err) end)
+      return
+    end
+
+    -- Attach sibling answers (e.g. the parallel `complexity` question) so
+    -- callers can consume them without an extra request.
+    parsed.answers = answers
+    if answers.complexity then
+      parsed.complexity = answers.complexity.choice
     end
 
     vim.schedule(function() callback(parsed) end)
@@ -231,35 +290,15 @@ function M.select_file(candidates, prompt, callback)
   M.decide(payload, "file", callback)
 end
 
----Call the OpenRouter chat-completions endpoint with a list of messages and
----invoke `callback` with the assistant's text reply.
----
----@param messages table[] An array of `{ role = "system"|"user"|"assistant", content = string }`.
+---Send a single chat-completions request for `model`.
+---@param model string
+---@param messages table[]
 ---@param callback fun(text: string|nil, err: string|nil)
-function M.chat(messages, callback)
-  vim.validate({
-    messages = { messages, "table" },
-    callback = { callback, "function" },
-  })
-
+local function chat_once(model, messages, callback)
   local cfg = config.get()
 
-  if cfg.api_key == nil or cfg.api_key == "" then
-    local err = "no_api_key: set OPENROUTER_API_KEY or configure api_key"
-    cfg.on_error(err)
-    callback(nil, err)
-    return
-  end
-
-  if vim.fn.executable("curl") == 0 then
-    local err = "curl_missing: curl is required but not found on PATH"
-    cfg.on_error(err)
-    callback(nil, err)
-    return
-  end
-
   local body = encode({
-    model = cfg.chat_model,
+    model = model,
     messages = messages,
   })
 
@@ -291,16 +330,14 @@ function M.chat(messages, callback)
       if obj.stderr ~= nil and obj.stderr ~= "" then
         err = err .. " (" .. vim.trim(obj.stderr) .. ")"
       end
-      cfg.on_error(err)
-      callback(nil, err)
+      vim.schedule(function() callback(nil, err) end)
       return
     end
 
     local ok, decoded = pcall(vim.json.decode, obj.stdout or "")
     if not ok or type(decoded) ~= "table" then
       local err = "bad_json"
-      cfg.on_error(err)
-      callback(nil, err)
+      vim.schedule(function() callback(nil, err) end)
       return
     end
 
@@ -308,8 +345,7 @@ function M.chat(messages, callback)
       local code = tostring(decoded.error.code or "unknown")
       local msg = tostring(decoded.error.message or "unknown error")
       local err = "api_error:" .. code .. ":" .. msg
-      cfg.on_error(err)
-      callback(nil, err)
+      vim.schedule(function() callback(nil, err) end)
       return
     end
 
@@ -317,7 +353,6 @@ function M.chat(messages, callback)
     local content = choice and choice.message and choice.message.content
     if content == nil or content == "" then
       local err = "empty_completion"
-      cfg.on_error(err)
       vim.schedule(function() callback(nil, err) end)
       return
     end
@@ -326,6 +361,96 @@ function M.chat(messages, callback)
   end
 
   vim.system(args, {}, on_exit)
+end
+
+---Whether an error from `chat_once` is worth retrying on the next model.
+---Auth (401), bad requests (400), and missing config/curl are fatal.
+---@param err string
+---@return boolean retryable
+local function retryable(err)
+  if err == nil then
+    return false
+  end
+  if err:find("no_api_key", 1, true) then return false end
+  if err:find("curl_missing", 1, true) then return false end
+  if err:find("api_error:401", 1, true) then return false end
+  if err:find("api_error:400", 1, true) then return false end
+  return true
+end
+
+---Call the built-in OpenRouter chat-completions client and invoke `callback`
+---with the assistant's text reply. `models` is a single model id or an ordered
+---list of ids; on a retryable failure (rate limit, disabled model, network) the
+---next model in the list is tried.
+---
+---@param models string|string[] Model id(s) to try, in order.
+---@param messages table[] An array of `{ role = "system"|"user"|"assistant", content = string }`.
+---@param callback fun(text: string|nil, err: string|nil)
+function M.openrouter_chat(models, messages, callback)
+  vim.validate({
+    messages = { messages, "table" },
+    callback = { callback, "function" },
+  })
+
+  local cfg = config.get()
+
+  local list
+  if type(models) == "string" then
+    list = { models }
+  elseif type(models) == "table" and #models > 0 then
+    list = models
+  else
+    list = { cfg.chat_model }
+  end
+
+  if cfg.api_key == nil or cfg.api_key == "" then
+    local err = "no_api_key: set OPENROUTER_API_KEY or configure api_key"
+    cfg.on_error(err)
+    callback(nil, err)
+    return
+  end
+
+  if vim.fn.executable("curl") == 0 then
+    local err = "curl_missing: curl is required but not found on PATH"
+    cfg.on_error(err)
+    callback(nil, err)
+    return
+  end
+
+  local i = 0
+  local function try_next(last_err)
+    i = i + 1
+    local model = list[i]
+    if model == nil then
+      cfg.on_error(last_err or "all_models_failed")
+      callback(nil, last_err)
+      return
+    end
+
+    chat_once(model, messages, function(content, err)
+      if err ~= nil and retryable(err) then
+        try_next(err)
+      else
+        callback(content, err)
+      end
+    end)
+  end
+
+  try_next()
+end
+
+---Invoke the configured chat backend (or the built-in OpenRouter client) with
+---the assistant's text reply. Provides the `chat_backend` extensibility seam.
+---
+---@param models string|string[] Model id(s) to try, in order.
+---@param messages table[] An array of `{ role = "system"|"user"|"assistant", content = string }`.
+---@param callback fun(text: string|nil, err: string|nil)
+function M.chat(models, messages, callback)
+  local backend = config.get().chat_backend
+  if backend ~= nil then
+    return backend(models, messages, callback)
+  end
+  return M.openrouter_chat(models, messages, callback)
 end
 
 return M

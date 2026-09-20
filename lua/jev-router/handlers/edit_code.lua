@@ -109,7 +109,7 @@ function M.run(prompt)
     },
   }
 
-  api.chat(messages, function(reply, err)
+  api.chat(config.get().chat_model, messages, function(reply, err)
     if err then
       return
     end

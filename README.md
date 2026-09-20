@@ -95,9 +95,10 @@ generate a single shell command for the prompt (with the working directory as
 context), previews it in a `vim.ui.input` prompt for you to edit/confirm, then
 runs it in a bottom terminal split.
 
-The `general_question` intent is implemented natively: it sends the prompt to a
-chat model and shows the answer in a floating window (press `q` or `<Esc>` to
-close).
+The `general_question` intent is implemented natively: Jev's parallel
+`complexity` judgment (quick vs deep) picks a chat-model tier, the handler
+injects bounded project context (active buffer, file tree, key files), and the
+answer is shown in a floating window (press `q` or `<Esc>` to close).
 
 The `edit_code` intent is implemented natively: it sends the current buffer and
 the request to a chat model, which returns the full updated file. The handler
@@ -116,7 +117,32 @@ require("jev-router").setup({
 })
 ```
 
-## Configuration
+## Extensibility
+
+Two seams let you swap the underlying implementations without touching the
+handlers: `chat_backend` (how the plugin talks to a chat model) and
+`file_provider` (how it discovers project files). Both default to the built-in
+implementations (OpenRouter chat client, `git ls-files` + open buffers).
+
+```lua
+require("jev-router").setup({
+  -- Route chat to any OpenAI-compatible endpoint (or a local model).
+  chat_backend = function(models, messages, callback)
+    -- models: string | string[] (ordered fallback)
+    -- messages: { { role = "...", content = "..." }, ... }
+    -- callback: fun(text: string|nil, err: string|nil)
+  end,
+
+  -- Custom file discovery (e.g. LSP workspace folders, a monorepo indexer).
+  file_provider = {
+    list = function(callback)
+      -- callback: fun(paths: string[])  -- absolute file paths
+    end,
+  },
+})
+```
+
+This is also what the test suite uses to inject fakes and avoid network calls.
 
 | Option                | Type     | Default                                          | Description                                        |
 | --------------------- | -------- | ------------------------------------------------ | -------------------------------------------------- |
@@ -124,7 +150,13 @@ require("jev-router").setup({
 | `endpoint`            | `string` | `https://openrouter.ai/api/alpha/decisions`      | Decisions endpoint                                 |
 | `model`               | `string` | `typesafe/jev-1.13`                             | Model alias                                        |
 | `chat_model`          | `string` | `openai/gpt-4o-mini`                             | Chat model for command/answer generation           |
+| `chat_models`         | `table`  | `{ quick = {...}, deep = {...} }`                | Tiered models (fallback order) for `general_question` |
 | `chat_endpoint`       | `string` | `https://openrouter.ai/api/v1/chat/completions` | Chat-completions endpoint                          |
+| `chat_backend`        | `function` | built-in OpenRouter chat client                 | Custom chat backend (model, messages, callback)    |
+| `file_provider`       | `table`  | git + buffers                                   | Custom file provider `{ list = function(callback) }` |
+| `context_max_files`   | `integer`| `200`                                            | Max files listed in injected context               |
+| `context_max_chars`   | `integer`| `20000`                                          | Max injected context characters                    |
+| `context_key_files`   | `string[]`| `{ "README.md" }`                               | File basenames always injected as context          |
 | `timeout_ms`          | `integer`| `30000`                                          | Per-request timeout                                |
 | `confidence_threshold`| `number` | `0.6`                                            | Minimum confidence to act on a route               |
 | `file_candidates_max` | `integer`| `100`                                            | Max candidate files sent to Jev for `read_file`    |

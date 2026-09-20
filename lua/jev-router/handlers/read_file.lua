@@ -3,102 +3,9 @@
 
 local config = require("jev-router.config")
 local api = require("jev-router.api")
+local files = require("jev-router.files")
 
 local M = {}
-
----Collect open buffer names, deduped and normalized to absolute paths.
----@return string[] paths
-local function buffer_candidates()
-  local seen = {}
-  local out = {}
-
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(bufnr) then
-      local name = vim.api.nvim_buf_get_name(bufnr)
-      if name ~= nil and name ~= "" then
-        local abs = vim.fn.fnamemodify(name, ":p")
-        if not seen[abs] then
-          seen[abs] = true
-          table.insert(out, abs)
-        end
-      end
-    end
-  end
-
-  return out
-end
-
----Create the `git ls-files` system command for gathering project files.
----@return table args|nil nil when git is unavailable
-local function git_ls_files_args()
-  if vim.fn.executable("git") == 0 then
-    return nil
-  end
-
-  local cwd = vim.fn.getcwd()
-  local res = vim.system({ "git", "-C", cwd, "rev-parse", "--is-inside-work-tree" }, { text = true }):wait()
-  if res == nil or vim.fn.trim(res.stdout or "") ~= "true" then
-    return nil
-  end
-
-  return { "git", "-C", cwd, "ls-files", "--cached", "--others", "--exclude-standard" }
-end
-
----Gather candidate files: open buffers first, then git-tracked project files.
----Falls back to `find` when git is unavailable. Results are absolute, deduped,
----and capped at `file_candidates_max`.
----@param callback fun(candidates: string[])
-function M.gather_candidates(callback)
-  local max = config.get().file_candidates_max or 100
-  local seen = {}
-  local out = {}
-
-  local function add(name)
-    local abs = vim.fn.fnamemodify(vim.trim(name), ":p")
-    if abs == "" or seen[abs] then
-      return
-    end
-    seen[abs] = true
-    table.insert(out, abs)
-  end
-
-  for _, buf in ipairs(buffer_candidates()) do
-    add(buf)
-  end
-
-  local git_args = git_ls_files_args()
-  local args = git_args
-    or { "find", ".", "-type", "f" }
-
-  ---@param obj vim.SystemCompleted
-  local function on_exit(obj)
-    if obj.code ~= 0 then
-      -- Fall back to find only if git itself failed (not "not a repo").
-      if git_args and args[1] == "git" then
-        vim.system({ "find", ".", "-type", "f" }, {},
-          function(o2)
-            if o2.code == 0 then
-              for line in (o2.stdout or ""):gmatch("[^\r\n]+") do
-                if #out < max then add(line) end
-              end
-            end
-            callback(out)
-          end)
-        return
-      end
-      callback(out)
-      return
-    end
-
-    for line in (obj.stdout or ""):gmatch("[^\r\n]+") do
-      if #out < max then add(line) end
-    end
-
-    callback(out)
-  end
-
-  vim.system(args, {}, on_exit)
-end
 
 ---Open a file in a vertical split with line numbers enabled, keeping focus on
 ---the new window.
@@ -136,7 +43,7 @@ end
 ---Semantically resolve which file a prompt refers to and open it.
 ---@param prompt string
 function M.run(prompt)
-  M.gather_candidates(function(candidates)
+  files.gather_candidates(function(candidates)
     if #candidates == 0 then
       config.get().on_error("no_candidates")
       return

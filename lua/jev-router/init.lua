@@ -26,8 +26,9 @@ local function route_run_command(prompt)
 end
 
 ---@param prompt string
-local function route_general_question(prompt)
-  general_question_handler.run(prompt)
+---@param answer jev-router.api.ParsedAnswer
+local function route_general_question(prompt, answer)
+  general_question_handler.run(prompt, answer and answer.complexity)
 end
 
 ---@type table<jev-router.Intent, fun(prompt: string)>
@@ -72,7 +73,7 @@ local function run_router(answer, prompt)
     return
   end
 
-  handler(prompt)
+  handler(prompt, answer)
 end
 
 ---Handle the result of a classification request.

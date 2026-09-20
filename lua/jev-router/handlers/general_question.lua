@@ -3,6 +3,7 @@
 
 local config = require("jev-router.config")
 local api = require("jev-router.api")
+local files = require("jev-router.files")
 
 local M = {}
 
@@ -42,31 +43,57 @@ function M.display(question, answer)
   vim.wo.wrap = true
 end
 
----Answer `prompt` with a chat model and show the reply in a floating window.
+---Answers `prompt` with a chat model (routed by `complexity`) after injecting
+---bounded project context, then shows the reply in a floating window.
 ---@param prompt string
-function M.run(prompt)
-  local messages = {
-    {
-      role = "system",
-      content = "You are a helpful assistant answering the user's question "
-        .. "about their code or project. Be concise and accurate.",
-    },
-    {
-      role = "user",
-      content = prompt,
-    },
-  }
+---@param complexity string|nil "quick" | "deep"
+function M.run(prompt, complexity)
+  local cfg = config.get()
+  local tier = complexity == "deep" and "deep" or "quick"
+  local models = (cfg.chat_models and cfg.chat_models[tier]) or cfg.chat_model
+  if type(models) == "string" then
+    models = { models }
+  end
+  if models == nil or #models == 0 then
+    models = { cfg.chat_model }
+  end
 
-  api.chat(messages, function(text, err)
-    if err then
-      return
+  files.gather_context(function(ctx)
+    local parts = {
+      "You are a helpful assistant answering the user's question about their "
+        .. "code or project. Be concise and accurate.",
+    }
+
+    if ctx.tree ~= "" then
+      parts[#parts + 1] = "\nProject files:\n" .. ctx.tree
     end
-    local answer = vim.trim(text or "")
-    if answer == "" then
-      config.get().on_error("empty_answer")
-      return
+    if next(ctx.files) ~= nil then
+      local file_parts = {}
+      for path, content in pairs(ctx.files) do
+        file_parts[#file_parts + 1] = "--- " .. path .. " ---\n" .. content
+      end
+      parts[#parts + 1] = "\nKey files:\n" .. table.concat(file_parts, "\n\n")
     end
-    M.display(prompt, answer)
+    if ctx.buffer ~= "" then
+      parts[#parts + 1] = "\nActive buffer:\n" .. ctx.buffer
+    end
+
+    local messages = {
+      { role = "system", content = table.concat(parts, "\n") },
+      { role = "user", content = prompt },
+    }
+
+    api.chat(models, messages, function(text, err)
+      if err then
+        return
+      end
+      local answer = vim.trim(text or "")
+      if answer == "" then
+        config.get().on_error("empty_answer")
+        return
+      end
+      M.display(prompt, answer)
+    end)
   end)
 end
 
