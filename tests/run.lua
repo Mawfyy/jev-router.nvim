@@ -213,7 +213,84 @@ ok(truncated ~= nil and truncated:sub(1, 5) == "hello" and #truncated > 5,
 eq(files.read_bounded(tmp, 100), "hello world", "read_bounded returns full short content")
 os.remove(tmp)
 
--- ----------------------------------------------------------------- summary
+-- ------------------------------------------------- structured edits
+local ee = require("jev-router.handlers.edit_code")
+
+local e1 = ee.parse_edits('{"edits":[{"find":"a","replace":"b"}]}')
+eq(type(e1), "table", "parse_edits accepts a JSON object")
+eq(e1[1].find, "a", "parse_edits extracts find")
+
+local e2 = ee.parse_edits('```json\n{"edits":[{"find":"x","replace":"y"}]}\n```')
+eq(type(e2), "table", "parse_edits accepts a fenced JSON object")
+
+local e3 = ee.parse_edits('just some prose ```\nlocal x = 1')
+eq(e3, nil, "parse_edits returns nil for non-JSON")
+
+-- apply_edits operates on the current buffer's text
+local cur = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(cur, 0, -1, false, { "function hello()", "  return 1", "end" })
+eq(ee.apply_edits(cur, { { find = "hello", replace = "greet" } }),
+  "function greet()\n  return 1\nend", "apply_edits replaces a unique match")
+vim.api.nvim_buf_set_lines(cur, 0, -1, false, { "AAA", "AAA" })
+eq(ee.apply_edits(cur, { { find = "AAA", replace = "B" } }),
+  nil, "apply_edits returns nil for a non-unique match")
+
+-- ------------------------------------------------------- streaming seam
+local stream_backend = {
+  chunks = nil,
+  text = nil,
+  err = nil,
+}
+config.setup({ chat_stream_backend = function(models, messages, on_chunk, on_done)
+  stream_backend.chunks = models
+  on_chunk("hel")
+  on_chunk("lo")
+  on_done("hello", nil)
+end })
+local got_chunks = {}
+local got_done = nil
+api.chat_stream("m", {}, function(d)
+  table.insert(got_chunks, d)
+end, function(text, err)
+  got_done = text
+end)
+eq(stream_backend.chunks, "m", "chat_stream delegates to chat_stream_backend")
+eq(table.concat(got_chunks), "hello", "streamed chunks delivered via on_chunk")
+eq(got_done, "hello", "streamed on_done delivers full text")
+
+-- opts plumbing (response_format) reaches the chat backend
+local seen_opts = nil
+config.setup({ chat_backend = function(models, messages, cb, opts)
+  seen_opts = opts
+  cb("ok", nil)
+end })
+api.chat("m", {}, function() end, { response_format = { type = "json_object" } })
+eq(seen_opts.response_format.type, "json_object", "chat forwards opts (response_format) to backend")
+
+-- ------------------------------------------------------- conversation
+local conv = require("jev-router.conversation")
+local cbuf = 777
+config.setup({ conversation = true, conversation_max_turns = 2 })
+conv.clear(cbuf)
+conv.append_user(cbuf, "hello")
+conv.append_assistant(cbuf, "hi")
+conv.append_user(cbuf, "now refactor it")
+local msgs = conv.messages(cbuf)
+eq(#msgs, 3, "conversation records user/assistant turns")
+eq(msgs[1].role, "user", "conversation first message is user")
+eq(msgs[3].content, "now refactor it", "conversation keeps latest user turn")
+ok(conv.summary(cbuf) ~= nil, "conversation summary is non-nil after turns")
+conv.clear(cbuf)
+eq(#conv.messages(cbuf), 0, "conversation clear resets history")
+
+-- cap eviction (2 turns = 4 messages max)
+for i = 1, 10 do
+  conv.append_user(cbuf, "u" .. i)
+end
+eq(#conv.messages(cbuf), 4, "conversation trims to conversation_max_turns * 2")
+conv.clear(cbuf)
+
+-- ------------------------------------------------- summary
 log(string.format("RESULT: %d passed, %d failed", passed, failed))
 f:close()
 

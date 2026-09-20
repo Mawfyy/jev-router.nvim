@@ -59,11 +59,17 @@ end
 ---question (quick vs deep) consumed by chat-backed handlers like
 ---`general_question`; it runs in the same request for zero extra latency.
 ---@param prompt string
+---@param history string|nil Optional recent-turn summary for follow-up routing.
 ---@return table payload
-function M.build_payload(prompt)
+function M.build_payload(prompt, history)
+  local state = prompt
+  if history ~= nil and history ~= "" then
+    state = "Conversation so far:\n" .. history .. "\n\nCurrent request: " .. prompt
+  end
+
   return {
     model = config.get().model,
-    state = prompt,
+    state = state,
     questions = {
       intent = {
         type = "choice",
@@ -249,12 +255,13 @@ end
 ---Classify `prompt` via the Decisions API and invoke `callback`.
 ---@param prompt string
 ---@param callback fun(parsed: jev-router.api.ParsedAnswer|nil, err: string|nil)
-function M.prompt(prompt, callback)
+---@param history string|nil Optional recent-turn summary for follow-up routing.
+function M.prompt(prompt, callback, history)
   vim.validate({
     prompt = { prompt, "string" },
     callback = { callback, "function" },
   })
-  M.decide(M.build_payload(prompt), "intent", callback)
+  M.decide(M.build_payload(prompt, history), "intent", callback)
 end
 
 ---Ask Jev which candidate file the user is referring to, then invoke `callback`.
@@ -294,13 +301,14 @@ end
 ---@param model string
 ---@param messages table[]
 ---@param callback fun(text: string|nil, err: string|nil)
-local function chat_once(model, messages, callback)
+---@param opts? table Extra request fields (e.g. `response_format`), merged into the body.
+local function chat_once(model, messages, callback, opts)
   local cfg = config.get()
 
-  local body = encode({
+  local body = vim.tbl_extend("force", {
     model = model,
     messages = messages,
-  })
+  }, opts or {})
 
   local args = {
     "curl",
@@ -311,7 +319,7 @@ local function chat_once(model, messages, callback)
     cfg.chat_endpoint,
     "--header", "Authorization: Bearer " .. cfg.api_key,
     "--header", "Content-Type: application/json",
-    "--data-binary", body,
+    "--data-binary", encode(body),
   }
 
   if cfg.http_referer ~= nil and cfg.http_referer ~= "" then
@@ -386,7 +394,8 @@ end
 ---@param models string|string[] Model id(s) to try, in order.
 ---@param messages table[] An array of `{ role = "system"|"user"|"assistant", content = string }`.
 ---@param callback fun(text: string|nil, err: string|nil)
-function M.openrouter_chat(models, messages, callback)
+---@param opts? table Extra request fields (e.g. `response_format`).
+function M.openrouter_chat(models, messages, callback, opts)
   vim.validate({
     messages = { messages, "table" },
     callback = { callback, "function" },
@@ -433,7 +442,7 @@ function M.openrouter_chat(models, messages, callback)
       else
         callback(content, err)
       end
-    end)
+    end, opts)
   end
 
   try_next()
@@ -445,12 +454,223 @@ end
 ---@param models string|string[] Model id(s) to try, in order.
 ---@param messages table[] An array of `{ role = "system"|"user"|"assistant", content = string }`.
 ---@param callback fun(text: string|nil, err: string|nil)
-function M.chat(models, messages, callback)
+---@param opts? table Extra request fields (e.g. `response_format`).
+function M.chat(models, messages, callback, opts)
   local backend = config.get().chat_backend
   if backend ~= nil then
-    return backend(models, messages, callback)
+    return backend(models, messages, callback, opts)
   end
-  return M.openrouter_chat(models, messages, callback)
+  return M.openrouter_chat(models, messages, callback, opts)
+end
+
+---Parse an SSE stream from OpenRouter's streaming chat-completions endpoint.
+---Maintains a line buffer across arbitrary chunk boundaries and invokes
+---`on_chunk` per text delta and `on_done` with the final text/error.
+---
+---@param on_chunk fun(delta: string)
+---@return table sse A state object with `feed(data)` and `finish()`.
+local function sse_state(on_chunk)
+  local state = {
+    buf = "",
+    text = "",
+    done = false,
+  }
+
+  ---@param record string A full SSE record (without the trailing blank line).
+  local function handle_record(record)
+    for data in record:gmatch("data:[^\r\n]*") do
+      local payload = data:sub(6):gsub("^%s+", "")
+      if payload == "[DONE]" then
+        state.done = true
+      else
+        local ok, decoded = pcall(vim.json.decode, payload)
+        if ok and type(decoded) == "table" then
+          local choice = decoded.choices and decoded.choices[1]
+          local delta = choice and choice.delta and choice.delta.content
+          if delta ~= nil and delta ~= "" then
+            state.text = state.text .. delta
+            on_chunk(delta)
+          end
+          if decoded.error and type(decoded.error) == "table" then
+            state.err = "api_error:" .. tostring(decoded.error.code or "unknown")
+          end
+        end
+      end
+    end
+  end
+
+  ---@param data string A raw chunk from the stdout stream.
+  function state.feed(data)
+    if data == nil then
+      return
+    end
+    state.buf = state.buf .. data
+    local sep
+    while true do
+      sep = state.buf:find("\n\n", 1, true)
+      if not sep then
+        break
+      end
+      local record = state.buf:sub(1, sep - 1)
+      state.buf = state.buf:sub(sep + 2)
+      handle_record(record)
+    end
+  end
+
+  function state.finish()
+    if state.buf ~= "" then
+      handle_record(state.buf)
+      state.buf = ""
+    end
+  end
+
+  return state
+end
+
+---Run one streaming request for `model`.
+---@param model string
+---@param messages table[]
+---@param on_chunk fun(delta: string)
+---@param on_done fun(text: string|nil, err: string|nil)
+local function stream_once(model, messages, on_chunk, on_done)
+  local cfg = config.get()
+
+  local body = encode({
+    model = model,
+    messages = messages,
+    stream = true,
+  })
+
+  local args = {
+    "curl",
+    "--silent",
+    "--show-error",
+    "--no-buffer",
+    "--max-time", tostring(math.floor(cfg.timeout_ms / 1000)),
+    "--request", "POST",
+    cfg.chat_endpoint,
+    "--header", "Authorization: Bearer " .. cfg.api_key,
+    "--header", "Content-Type: application/json",
+    "--data-binary", body,
+  }
+
+  if cfg.http_referer ~= nil and cfg.http_referer ~= "" then
+    table.insert(args, "--header")
+    table.insert(args, "HTTP-Referer: " .. cfg.http_referer)
+  end
+  if cfg.app_title ~= nil and cfg.app_title ~= "" then
+    table.insert(args, "--header")
+    table.insert(args, "X-Title: " .. cfg.app_title)
+  end
+
+  local sse = sse_state(function(delta)
+    vim.schedule(function() on_chunk(delta) end)
+  end)
+
+  -- Non-JSON error payload (curl prints an error body to stderr but exits 0 in
+  -- some cases); capture stderr for diagnostics.
+  local stderr_buf = ""
+
+  ---@param obj vim.SystemCompleted
+  local function on_exit(obj)
+    if obj.code ~= 0 then
+      local err = "request_failed: curl exit " .. tostring(obj.code)
+      if stderr_buf ~= "" then
+        err = err .. " (" .. vim.trim(stderr_buf) .. ")"
+      end
+      cfg.on_error(err)
+      vim.schedule(function() on_done(nil, err) end)
+      return
+    end
+
+    sse.finish()
+    if sse.err ~= nil then
+      vim.schedule(function() on_done(nil, sse.err) end)
+    else
+      vim.schedule(function() on_done(sse.text, nil) end)
+    end
+  end
+
+  vim.system(args, {
+    text = true,
+    stdout = function(_, data)
+      sse.feed(data)
+    end,
+    stderr = function(_, data)
+      if data ~= nil then
+        stderr_buf = stderr_buf .. data
+      end
+    end,
+  }, on_exit)
+end
+
+---Stream a chat-completions request through the built-in OpenRouter client.
+---`on_chunk` receives each text delta; `on_done(text, err)` fires once at end.
+---
+---@param models string|string[] Model id(s) to try, in order.
+---@param messages table[]
+---@param on_chunk fun(delta: string)
+---@param on_done fun(text: string|nil, err: string|nil)
+function M.openrouter_chat_stream(models, messages, on_chunk, on_done)
+  local cfg = config.get()
+
+  local list
+  if type(models) == "string" then
+    list = { models }
+  elseif type(models) == "table" and #models > 0 then
+    list = models
+  else
+    list = { cfg.chat_model }
+  end
+
+  if cfg.api_key == nil or cfg.api_key == "" then
+    local err = "no_api_key: set OPENROUTER_API_KEY or configure api_key"
+    cfg.on_error(err)
+    on_done(nil, err)
+    return
+  end
+
+  if vim.fn.executable("curl") == 0 then
+    local err = "curl_missing: curl is required but not found on PATH"
+    cfg.on_error(err)
+    on_done(nil, err)
+    return
+  end
+
+  local i = 0
+  local function try_next(last_err)
+    i = i + 1
+    local model = list[i]
+    if model == nil then
+      cfg.on_error(last_err or "all_models_failed")
+      on_done(nil, last_err)
+      return
+    end
+    stream_once(model, messages, on_chunk, function(text, err)
+      if err ~= nil and retryable(err) then
+        try_next(err)
+      else
+        on_done(text, err)
+      end
+    end)
+  end
+
+  try_next()
+end
+
+---Stream a chat response through the configured backend (or built-in), yielding
+---text deltas via `on_chunk` and finishing via `on_done(text, err)`.
+---
+---@param models string|string[] Model id(s) to try, in order.
+---@param messages table[]
+---@param on_chunk fun(delta: string)
+---@param on_done fun(text: string|nil, err: string|nil)
+function M.chat_stream(models, messages, on_chunk, on_done)
+  local backend = config.get().chat_stream_backend
+  if backend ~= nil then
+    return backend(models, messages, on_chunk, on_done)
+  end
+  return M.openrouter_chat_stream(models, messages, on_chunk, on_done)
 end
 
 return M

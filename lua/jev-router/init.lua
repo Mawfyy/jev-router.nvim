@@ -3,6 +3,7 @@
 
 local config = require("jev-router.config")
 local api = require("jev-router.api")
+local conversation = require("jev-router.conversation")
 local read_file_handler = require("jev-router.handlers.read_file")
 local run_command_handler = require("jev-router.handlers.run_command")
 local general_question_handler = require("jev-router.handlers.general_question")
@@ -94,9 +95,18 @@ function M.ask(prompt)
     config.get().on_error("empty_prompt")
     return
   end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+
+  -- Prior turns hint the router so follow-ups (e.g. "now refactor it") route
+  -- correctly. Capture before recording the current turn.
+  local summary = conversation.summary(bufnr)
+
+  conversation.append_user(bufnr, prompt)
+
   api.prompt(prompt, function(parsed, err)
     on_classified(parsed, err, prompt)
-  end)
+  end, summary)
 end
 
 ---Ask about the current visual/line selection, or the whole buffer when there
@@ -138,6 +148,14 @@ function M.setup(opts)
   end, {
     nargs = "?",
     desc = "Classify the current buffer (optionally with a leading prompt)",
+  })
+
+  vim.api.nvim_create_user_command("JevClear", function()
+    conversation.clear(vim.api.nvim_get_current_buf())
+    vim.notify("[jev-router] conversation cleared", vim.log.levels.INFO)
+  end, {
+    nargs = 0,
+    desc = "Clear the current buffer's Jev conversation history",
   })
 end
 

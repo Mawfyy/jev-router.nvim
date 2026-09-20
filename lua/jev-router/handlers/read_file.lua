@@ -4,6 +4,7 @@
 local config = require("jev-router.config")
 local api = require("jev-router.api")
 local files = require("jev-router.files")
+local conversation = require("jev-router.conversation")
 
 local M = {}
 
@@ -22,6 +23,8 @@ function M.open(path)
   vim.wo.number = true
   vim.wo.relativenumber = true
   vim.wo.cursorline = true
+
+  conversation.append_assistant(vim.api.nvim_get_current_buf(), "Opened: " .. path)
 end
 
 ---Offer the user a picker over the candidates when confidence is too low.

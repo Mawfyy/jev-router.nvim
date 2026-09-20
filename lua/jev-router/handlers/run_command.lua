@@ -3,6 +3,7 @@
 
 local config = require("jev-router.config")
 local api = require("jev-router.api")
+local conversation = require("jev-router.conversation")
 
 local M = {}
 
@@ -64,6 +65,7 @@ local function confirm_and_run(cmd)
       return
     end
     M.execute(answer)
+    conversation.append_assistant(vim.api.nvim_get_current_buf(), "Ran: " .. answer)
   end)
 end
 

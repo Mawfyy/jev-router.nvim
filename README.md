@@ -97,12 +97,14 @@ runs it in a bottom terminal split.
 
 The `general_question` intent is implemented natively: Jev's parallel
 `complexity` judgment (quick vs deep) picks a chat-model tier, the handler
-injects bounded project context (active buffer, file tree, key files), and the
-answer is shown in a floating window (press `q` or `<Esc>` to close).
+injects bounded project context (active buffer, file tree, key files), streams
+the reply into a floating window by default (press `q` or `<Esc>` to close).
 
-The `edit_code` intent is implemented natively: it sends the current buffer and
-the request to a chat model, which returns the full updated file. The handler
-shows a `vimdiff` preview and applies the change only after you confirm.
+The `edit_code` intent is implemented natively: it asks a chat model for a
+minimal set of structured find/replace edits (JSON via `response_format`),
+applies only the changed hunks, and shows a `vimdiff` preview before you
+confirm. If the model doesn't return structured edits, it falls back to a
+full-file rewrite.
 
 All four intents (`read_file`, `edit_code`, `run_command`, `general_question`)
 are implemented natively. Override any of them via `route_handlers` in `setup`:
@@ -119,18 +121,25 @@ require("jev-router").setup({
 
 ## Extensibility
 
-Two seams let you swap the underlying implementations without touching the
-handlers: `chat_backend` (how the plugin talks to a chat model) and
-`file_provider` (how it discovers project files). Both default to the built-in
-implementations (OpenRouter chat client, `git ls-files` + open buffers).
+Three seams let you swap the underlying implementations without touching the
+handlers: `chat_backend` (non-streaming chat), `chat_stream_backend` (streaming
+chat), and `file_provider` (file discovery). All default to the built-in
+implementations (OpenRouter clients, `git ls-files` + open buffers).
 
 ```lua
 require("jev-router").setup({
   -- Route chat to any OpenAI-compatible endpoint (or a local model).
-  chat_backend = function(models, messages, callback)
+  chat_backend = function(models, messages, callback, opts)
     -- models: string | string[] (ordered fallback)
     -- messages: { { role = "...", content = "..." }, ... }
+    -- opts: optional extra request fields (e.g. response_format)
     -- callback: fun(text: string|nil, err: string|nil)
+  end,
+
+  -- Stream chat responses incrementally (used by general_question).
+  chat_stream_backend = function(models, messages, on_chunk, on_done)
+    -- on_chunk: fun(delta: string)
+    -- on_done: fun(text: string|nil, err: string|nil)
   end,
 
   -- Custom file discovery (e.g. LSP workspace folders, a monorepo indexer).
@@ -144,7 +153,13 @@ require("jev-router").setup({
 
 This is also what the test suite uses to inject fakes and avoid network calls.
 
-| Option                | Type     | Default                                          | Description                                        |
+## Multi-turn conversation
+
+The plugin keeps a bounded, per-buffer conversation so follow-ups like
+"now refactor it" route correctly and chat answers carry prior context. Clear it
+with `:JevClear`.
+
+## Configuration
 | --------------------- | -------- | ------------------------------------------------ | -------------------------------------------------- |
 | `api_key`             | `string` | `$OPENROUTER_API_KEY`                            | OpenRouter API key                                 |
 | `endpoint`            | `string` | `https://openrouter.ai/api/alpha/decisions`      | Decisions endpoint                                 |
@@ -152,7 +167,11 @@ This is also what the test suite uses to inject fakes and avoid network calls.
 | `chat_model`          | `string` | `openai/gpt-4o-mini`                             | Chat model for command/answer generation           |
 | `chat_models`         | `table`  | `{ quick = {...}, deep = {...} }`                | Tiered models (fallback order) for `general_question` |
 | `chat_endpoint`       | `string` | `https://openrouter.ai/api/v1/chat/completions` | Chat-completions endpoint                          |
-| `chat_backend`        | `function` | built-in OpenRouter chat client                 | Custom chat backend (model, messages, callback)    |
+| `chat_backend`        | `function` | built-in OpenRouter chat client                 | Custom chat backend (model, messages, callback, opts) |
+| `chat_stream_backend` | `function` | built-in OpenRouter streaming client            | Custom streaming backend (model, messages, on_chunk, on_done) |
+| `stream`              | `boolean` | `true`                                          | Stream responses incrementally                     |
+| `conversation`        | `boolean` | `true`                                          | Keep a per-buffer conversation history             |
+| `conversation_max_turns` | `integer` | `6`                                          | Max turn pairs retained per buffer                 |
 | `file_provider`       | `table`  | git + buffers                                   | Custom file provider `{ list = function(callback) }` |
 | `context_max_files`   | `integer`| `200`                                            | Max files listed in injected context               |
 | `context_max_chars`   | `integer`| `20000`                                          | Max injected context characters                    |

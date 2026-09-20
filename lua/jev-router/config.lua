@@ -24,10 +24,20 @@
 ---context, when present.
 ---@field context_key_files? string[]
 ---Custom chat backend. Overrides the built-in OpenRouter chat-completions client.
----Signature: `fun(model: string|string[], messages: table[], callback: fun(text: string|nil, err: string|nil))`.
----@field chat_backend? fun(model: string|string[], messages: table[], callback: function)
+---Signature: `fun(model: string|string[], messages: table[], callback: fun(text: string|nil, err: string|nil), opts?: table)`.
+---@field chat_backend? fun(model: string|string[], messages: table[], callback: function, opts?: table)
+---Custom streaming chat backend. Overrides the built-in OpenRouter streaming
+---client. Signature:
+---`fun(model: string|string[], messages: table[], on_chunk: fun(delta: string), on_done: fun(text: string|nil, err: string|nil))`.
+---@field chat_stream_backend? fun(model: string|string[], messages: table[], on_chunk: function, on_done: function)
 ---Custom file provider. Overrides the built-in git + buffers discovery.
 ---@field file_provider? { list: fun(callback: fun(paths: string[])) }
+---Stream chat responses (e.g. `general_question`) incrementally when true.
+---@field stream? boolean
+---Enable multi-turn conversation history (per buffer).
+---@field conversation? boolean
+---Maximum assistant/user turn pairs retained per buffer.
+---@field conversation_max_turns? integer
 ---Per-request timeout in milliseconds.
 ---@field timeout_ms? integer
 ---Minimum Choice `confidence` (0..1) required to act on a route. Below this the
@@ -58,8 +68,12 @@
 ---@field context_max_files integer
 ---@field context_max_chars integer
 ---@field context_key_files string[]
----@field chat_backend fun(model: string|string[], messages: table[], callback: function)
+---@field chat_backend fun(model: string|string[], messages: table[], callback: function, opts?: table)
+---@field chat_stream_backend fun(model: string|string[], messages: table[], on_chunk: function, on_done: function)
 ---@field file_provider { list: fun(callback: fun(paths: string[])) }
+---@field stream boolean
+---@field conversation boolean
+---@field conversation_max_turns integer
 ---@field timeout_ms integer
 ---@field confidence_threshold number
 ---@field file_candidates_max integer
@@ -84,6 +98,9 @@ M.defaults = {
   context_max_files = 200,
   context_max_chars = 20000,
   context_key_files = { "README.md" },
+  stream = true,
+  conversation = true,
+  conversation_max_turns = 6,
   timeout_ms = 30000,
   confidence_threshold = 0.6,
   file_candidates_max = 100,
