@@ -7,11 +7,19 @@
 ---@field endpoint? string
 ---Model alias sent in the `model` request field.
 ---@field model? string
+---Chat model used for generating commands / answering questions (OpenRouter
+---chat-completions API).
+---@field chat_model? string
+---Chat-completions endpoint.
+---@field chat_endpoint? string
 ---Per-request timeout in milliseconds.
 ---@field timeout_ms? integer
 ---Minimum Choice `confidence` (0..1) required to act on a route. Below this the
 ---intent is treated as uncertain and handed to `on_uncertain`.
 ---@field confidence_threshold? number
+---Maximum number of candidate files sent to Jev for the `read_file` file-choice
+---question. Jev supports up to 255 options; this bounds token cost.
+---@field file_candidates_max? integer
 ---HTTP referer header (OpenRouter attribution). Optional.
 ---@field http_referer? string
 ---App title header (OpenRouter attribution). Optional.
@@ -28,8 +36,11 @@
 ---@field api_key string
 ---@field endpoint string
 ---@field model string
+---@field chat_model string
+---@field chat_endpoint string
 ---@field timeout_ms integer
 ---@field confidence_threshold number
+---@field file_candidates_max integer
 ---@field http_referer string
 ---@field app_title string
 ---@field on_error fun(err: string)
@@ -42,8 +53,11 @@ local M = {}
 M.defaults = {
   endpoint = "https://openrouter.ai/api/alpha/decisions",
   model = "typesafe/jev-1.13",
+  chat_model = "openai/gpt-4o-mini",
+  chat_endpoint = "https://openrouter.ai/api/v1/chat/completions",
   timeout_ms = 30000,
   confidence_threshold = 0.6,
+  file_candidates_max = 100,
   on_error = function(err) vim.notify("[jev-router] " .. err, vim.log.levels.ERROR) end,
   on_uncertain = function(intent, confidence)
     vim.notify(
@@ -60,12 +74,40 @@ M.defaults = {
 ---@type jev-router.config.Options
 M._user_opts = {}
 
+---Load a `.env` file (project-local, gitignored) and populate `vim.env` with any
+---keys not already set. Format is one `KEY="value"` per line.
+---@param path string
+local function load_dotenv(path)
+  local f = io.open(path, "r")
+  if not f then
+    return
+  end
+  for line in f:lines() do
+    local key, value = line:match("^%s*([%w_]+)%s*=%s*\"?([^\"]*)\"?%s*$")
+    if key and vim.env[key] == nil then
+      vim.env[key] = value
+    end
+  end
+  f:close()
+end
+
+---Read `.env` from the plugin root, the current working directory, and the
+---user's Neovim config directory.
+local function load_env()
+  local plugin_root = debug.getinfo(1, "S").source:sub(2):gsub("/lua/jev-router/config.lua$", "")
+  load_dotenv(plugin_root .. "/.env")
+  load_dotenv(vim.fn.getcwd() .. "/.env")
+  load_dotenv(vim.fn.stdpath("config") .. "/.env")
+end
+
 ---@class jev-router.config.Config
 local config = setmetatable({}, { __index = M.defaults })
 
 ---Merge and store user overrides, then resolve derived values.
 ---@param opts? jev-router.config.Options
 function M.setup(opts)
+  load_env()
+
   M._user_opts = vim.tbl_deep_extend("force", M._user_opts or {}, opts or {})
 
   config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), M._user_opts or {})

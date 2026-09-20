@@ -87,6 +87,43 @@ eq(e2, "bad_json", "parse surfaces malformed body")
 local _, e3 = api.parse('{"answers":{}}')
 eq(e3, "bad_json", "parse surfaces missing intent answer")
 
+-- ----------------------------------------------------- file choice payload
+local fp = api.build_choice_payload("open drivers code", "file", "which file?", {
+  ["/a/b/drivers.lua"] = "/a/b/drivers.lua",
+})
+eq(fp.state, "open drivers code", "file payload.state is the prompt")
+eq(fp.questions.file.type, "choice", "file payload question is a choice")
+eq(fp.questions.file.criteria["/a/b/drivers.lua"], "/a/b/drivers.lua",
+  "file payload carries criteria")
+
+-- parse_question extracts a non-intent question
+local fresp = '{"model":"m","answers":{"file":{"type":"choice",'
+  .. '"choice":"/a/b/drivers.lua","confidence":0.88,'
+  .. '"probabilities":{"/a/b/drivers.lua":0.88}}}}'
+local fansw, ferr = api.parse_question(fresp, "file")
+eq(ferr, nil, "parse_question file returns no error")
+eq(fansw.choice, "/a/b/drivers.lua", "parse_question extracts choice")
+eq(fansw.confidence, 0.88, "parse_question extracts confidence")
+
+-- parse (default) still reads the intent question
+local ip, ie = api.parse(okresp)
+eq(ie, nil, "parse default question returns no error")
+eq(ip.choice, "run_command", "parse default extracts intent choice")
+
+-- ----------------------------------------------------- run_command cleaning
+local rc = require("jev-router.handlers.run_command")
+eq(rc.clean("```bash\nmake test\n```"), "make test", "clean strips fenced block")
+eq(rc.clean("  npm test  "), "npm test", "clean trims whitespace")
+eq(rc.clean("$ make test"), "make test", "clean strips shell prompt")
+eq(rc.clean("`make test`"), "make test", "clean strips backticks")
+
+-- ----------------------------------------------------- edit_code content
+local ec = require("jev-router.handlers.edit_code")
+eq(ec.extract_content("```lua\nlocal x = 1\nreturn x\n```"), "local x = 1\nreturn x",
+  "extract_content strips a fenced block")
+eq(ec.extract_content("no fence here"), "no fence here",
+  "extract_content returns text verbatim when unfenced")
+
 -- ------------------------------------------------------------- routing
 -- Drive the router without a network call by re-implementing init.run via the
 -- exported classify path with vim.system stubbed.
@@ -104,24 +141,22 @@ vim.system = function(args, opts, on_exit)
   })
 end
 
-local notified = {}
-local orig_notify = vim.notify
-vim.notify = function(msg, level)
-  table.insert(notified, msg)
-end
-
-init.setup({ api_key = "k", confidence_threshold = 0.6 })
+local dispatched = {}
+init.setup({
+  api_key = "k",
+  confidence_threshold = 0.6,
+  route_handlers = {
+    edit_code = function(prompt) table.insert(dispatched, "edit_code:" .. prompt) end,
+  },
+})
 init.ask("refactor this function")
 
 ok(seen.args ~= nil, "vim.system invoked with curl args")
-ok(#notified > 0, "route handler notified")
-eq(vim.tbl_count(notified), 1, "exactly one route notified")
-ok(type(notified[1]) == "string" and notified[1]:find("edit_code", 1, true) ~= nil,
-  "routed to edit_code")
+eq(#dispatched, 1, "exactly one route dispatched")
+ok(dispatched[1] == "edit_code:refactor this function", "routed to edit_code")
 
 -- restore
 vim.system = orig_system
-vim.notify = orig_notify
 
 -- ----------------------------------------------------------------- summary
 log(string.format("RESULT: %d passed, %d failed", passed, failed))

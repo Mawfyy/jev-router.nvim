@@ -3,30 +3,31 @@
 
 local config = require("jev-router.config")
 local api = require("jev-router.api")
+local read_file_handler = require("jev-router.handlers.read_file")
+local run_command_handler = require("jev-router.handlers.run_command")
+local general_question_handler = require("jev-router.handlers.general_question")
+local edit_code_handler = require("jev-router.handlers.edit_code")
 
 local M = {}
 
----Built-in route handlers. Each is a stub that notifies instead of acting.
----Replace them by passing `route_handlers` to setup().
-
 ---@param prompt string
 local function route_read_file(prompt)
-  vim.notify("[jev-router] read_file: " .. prompt, vim.log.levels.INFO)
+  read_file_handler.run(prompt)
 end
 
 ---@param prompt string
 local function route_edit_code(prompt)
-  vim.notify("[jev-router] edit_code: " .. prompt, vim.log.levels.INFO)
+  edit_code_handler.run(prompt)
 end
 
 ---@param prompt string
 local function route_run_command(prompt)
-  vim.notify("[jev-router] run_command: " .. prompt, vim.log.levels.INFO)
+  run_command_handler.run(prompt)
 end
 
 ---@param prompt string
 local function route_general_question(prompt)
-  vim.notify("[jev-router] general_question: " .. prompt, vim.log.levels.INFO)
+  general_question_handler.run(prompt)
 end
 
 ---@type table<jev-router.Intent, fun(prompt: string)>
