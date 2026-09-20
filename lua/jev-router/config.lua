@@ -60,12 +60,43 @@ M.defaults = {
 ---@type jev-router.config.Options
 M._user_opts = {}
 
+---Load a `.env` file (project-local, gitignored) and populate `vim.env` with any
+---keys not already set. Format is one `KEY="value"` per line.
+---@param path string
+local function load_dotenv(path)
+  local f = io.open(path, "r")
+  if not f then
+    return
+  end
+  for line in f:lines() do
+    local key, value = line:match("^%s*([%w_]+)%s*=%s*\"?([^\"]*)\"?%s*$")
+    if key then
+      key = key:match("^export%s+(.+)$") or key
+      if vim.env[key] == nil then
+        vim.env[key] = value
+      end
+    end
+  end
+  f:close()
+end
+
+---Read `.env` from the plugin root, the current working directory, and the
+---user's Neovim config directory.
+local function load_env()
+  local plugin_root = debug.getinfo(1, "S").source:sub(2):gsub("/lua/jev-router/config.lua$", "")
+  load_dotenv(plugin_root .. "/.env")
+  load_dotenv(vim.fn.getcwd() .. "/.env")
+  load_dotenv(vim.fn.stdpath("config") .. "/.env")
+end
+
 ---@class jev-router.config.Config
 local config = setmetatable({}, { __index = M.defaults })
 
 ---Merge and store user overrides, then resolve derived values.
 ---@param opts? jev-router.config.Options
 function M.setup(opts)
+  load_env()
+
   M._user_opts = vim.tbl_deep_extend("force", M._user_opts or {}, opts or {})
 
   config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), M._user_opts or {})
